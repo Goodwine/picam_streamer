@@ -169,32 +169,53 @@ class StreamHandler(BaseHTTPRequestHandler):
     by the CameraManager. It relies on the HTTP standard multipart/x-mixed-replace
     type, which tells the browser to keep replacing the image in real-time.
     """
-    def do_GET(self):
-        manager = self.server.camera_manager
-        manager.acquire()
-        
-        if not manager.cam:
-            self.send_error(500, "Camera hardware failed to start or is currently unavailable.")
-            return
-
+    def _send_common_headers(self, content_type):
         self.send_response(200)
         self.send_header('Age', '0')
         self.send_header('Cache-Control', 'no-cache, private')
         self.send_header('Pragma', 'no-cache')
-        self.send_header('Content-Type', 'multipart/x-mixed-replace; boundary=FRAME')
+        self.send_header('Content-Type', content_type)
+
+    def _snapshot(self, manager):
+        frame = manager.get_frame()
+        if frame:
+            self._send_common_headers('image/jpeg')
+            self.send_header('Content-Length', str(len(frame)))
+            self.end_headers()
+            self.wfile.write(frame)
+        else:
+            self.send_error(503, "Camera started but no frame is available yet.")
+
+    def _stream(self, manager):
+        self._send_common_headers('multipart/x-mixed-replace; boundary=FRAME')
         self.end_headers()
 
+        while True:
+            frame = manager.get_frame()
+            if frame:
+                self.wfile.write(b'--FRAME\r\n')
+                self.send_header('Content-Type', 'image/jpeg')
+                self.send_header('Content-Length', str(len(frame)))
+                self.end_headers()
+                self.wfile.write(frame)
+                self.wfile.write(b'\r\n')
+            else:
+                break
+
+    def do_GET(self):
+        manager = self.server.camera_manager
+        manager.acquire()
+        
         try:
-            while True:
-                frame = manager.get_frame()
-                # frame becomes falsy when the camera hardware shuts down
-                if frame:
-                    self.wfile.write(b'--FRAME\r\n')
-                    self.send_header('Content-Type', 'image/jpeg')
-                    self.send_header('Content-Length', len(frame))
-                    self.end_headers()
-                    self.wfile.write(frame)
-                    self.wfile.write(b'\r\n')
+            if not manager.cam:
+                self.send_error(500, "Camera hardware failed to start or is currently unavailable.")
+                manager.release()
+                return
+
+            if self.path in ('/snapshot', '/snapshot.jpg'):
+                self._snapshot(manager)
+            else:
+                self._stream(manager)
         except Exception:
             pass
         finally:
