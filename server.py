@@ -2,7 +2,7 @@ import argparse
 import time
 import logging
 import threading
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
@@ -243,7 +243,7 @@ def main():
     if args.timeout < 0:
         manager.acquire()
 
-    server = HTTPServer((args.host, args.port), StreamHandler)
+    server = ThreadingHTTPServer((args.host, args.port), StreamHandler)
     server.camera_manager = manager
 
     logging.info(f"Serving at http://{args.host}:{args.port}")
