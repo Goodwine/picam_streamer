@@ -30,6 +30,7 @@ python3 server.py --help
 - `--fliph` / `--flipv`: Flips the camera image horizontally and/or vertically.
 - `--timeout`: Seconds to wait before stopping the camera when there are no viewers. Defaults to
   `5`. A negative value (e.g. `-1`) keeps the idle camera running indefinitely.
+- `--fps`: Target camera framerate (frames per second). Defaults to `1`.
 - `--debug`: Enable debug level logging. This logs the requester's IP address.
 
 ## Endpoints

@@ -40,7 +40,8 @@ class PiCameraSource(CameraSource):
             vflip=bool(self.args.flipv)
         )
         self.cam.configure(self.cam.create_video_configuration(
-            main={"size": (self.args.width, self.args.height)}, transform=transform
+            main={"size": (self.args.width, self.args.height)}, transform=transform,
+            controls={"FrameDurationLimits": (int(1e6 / self.args.fps), int(1e6 / self.args.fps))}
         ))
 
     def _run(self):
@@ -86,6 +87,9 @@ class WebcamSource(CameraSource):
             ret, buf = self.cv2.imencode('.jpg', frame)
             if ret:
                 self.on_frame(buf.tobytes())
+            
+            # Throttle to requested framerate
+            time.sleep(1.0 / self.args.fps)
         self.cap.release()
 
 class CameraManager:
@@ -182,6 +186,18 @@ class StreamHandler(BaseHTTPRequestHandler):
         # Forward standard HTTP logs to debug instead of raw stderr to reduce console spam
         logging.debug(f"{self.client_address[0]} - {format%args}")
 
+    def _write_frame(self, frame):
+        try:
+            self.wfile.write(b'--FRAME\r\n')
+            self.send_header('Content-Type', 'image/jpeg')
+            self.send_header('Content-Length', str(len(frame)))
+            self.end_headers()
+            self.wfile.write(frame)
+            self.wfile.write(b'\r\n')
+            return True
+        except Exception:
+            return False
+
     def _send_common_headers(self, content_type):
         self.send_response(200)
         self.send_header('Age', '0')
@@ -203,16 +219,16 @@ class StreamHandler(BaseHTTPRequestHandler):
         self._send_common_headers('multipart/x-mixed-replace; boundary=FRAME')
         self.end_headers()
 
+        # We get the latest frame rather than computing a new one because a very
+        # low FPS would otherwise block the stream, causing it to lag.
+        initial_frame = manager.get_latest_frame()
+        if initial_frame:
+            if not self._write_frame(initial_frame):
+                return
+
         while True:
             frame = manager.get_frame()
-            if frame:
-                self.wfile.write(b'--FRAME\r\n')
-                self.send_header('Content-Type', 'image/jpeg')
-                self.send_header('Content-Length', str(len(frame)))
-                self.end_headers()
-                self.wfile.write(frame)
-                self.wfile.write(b'\r\n')
-            else:
+            if not frame or not self._write_frame(frame):
                 break
 
     def do_GET(self):
@@ -247,8 +263,9 @@ def main():
     p.add_argument('--height', type=int, default=480, help='Camera stream resolution height')
     p.add_argument('--fliph', action='store_true', help='Flip the camera stream horizontally')
     p.add_argument('--flipv', action='store_true', help='Flip the camera stream vertically')
-    p.add_argument('--timeout', type=float, default=5, help='Seconds to wait while idle before shutting down camera. Negative values never shut down.')
-    p.add_argument('--debug', action='store_true', help='Enable debug level logging.')
+    p.add_argument('--timeout', type=float, default=5, help='Seconds to wait while idle before shutting down camera. Negative values never shut down')
+    p.add_argument('--fps', type=int, default=1, help='Target camera framerate')
+    p.add_argument('--debug', action='store_true', help='Enable debug level logging')
 
     args = p.parse_args()
 
