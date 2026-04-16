@@ -108,25 +108,34 @@ class CameraManager:
             self.lock.wait()
             return self.frame
 
-    def acquire(self):
+    def get_latest_frame(self):
+        """If a frame is already buffered, grab it instantly without waiting."""
+        with self.lock:
+            if not self.frame:
+                self.lock.wait(timeout=2.0)
+            return self.frame
+
+    def acquire(self, client_ip=None):
         with self.lock:
             self.viewers += 1
-            logging.info(f"Viewer connected. Total viewers: {self.viewers}")
+            ip_str = f" from {client_ip}" if client_ip else ""
+            logging.debug(f"Viewer connected{ip_str}. Total viewers: {self.viewers}")
             if self.idle_timer:
                 self.idle_timer.cancel()
                 self.idle_timer = None
             if not self.cam:
                 self._start_hardware()
 
-    def release(self):
+    def release(self, client_ip=None):
         with self.lock:
             self.viewers = max(0, self.viewers - 1)
-            logging.info(f"Viewer disconnected. Total viewers: {self.viewers}")
+            ip_str = f" from {client_ip}" if client_ip else ""
+            logging.debug(f"Viewer disconnected{ip_str}. Total viewers: {self.viewers}")
             if self.viewers == 0 and not self.shutting_down:
                 if self.args.timeout == 0:
                     self._stop_hardware()
                 elif self.args.timeout > 0:
-                    logging.info(f"No viewers. Stopping in {self.args.timeout}s.")
+                    logging.debug(f"No viewers. Stopping in {self.args.timeout}s.")
                     self.idle_timer = threading.Timer(self.args.timeout, self._stop_hardware)
                     # Otherwise, this prevents the program from exiting until the timer runs out.
                     self.idle_timer.daemon = True
@@ -169,6 +178,10 @@ class StreamHandler(BaseHTTPRequestHandler):
     by the CameraManager. It relies on the HTTP standard multipart/x-mixed-replace
     type, which tells the browser to keep replacing the image in real-time.
     """
+    def log_message(self, format, *args):
+        # Forward standard HTTP logs to debug instead of raw stderr to reduce console spam
+        logging.debug(f"{self.client_address[0]} - {format%args}")
+
     def _send_common_headers(self, content_type):
         self.send_response(200)
         self.send_header('Age', '0')
@@ -177,7 +190,7 @@ class StreamHandler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', content_type)
 
     def _snapshot(self, manager):
-        frame = manager.get_frame()
+        frame = manager.get_latest_frame()
         if frame:
             self._send_common_headers('image/jpeg')
             self.send_header('Content-Length', str(len(frame)))
@@ -204,12 +217,13 @@ class StreamHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         manager = self.server.camera_manager
-        manager.acquire()
+        client_ip = self.client_address[0]
+        manager.acquire(client_ip)
         
         try:
             if not manager.cam:
                 self.send_error(500, "Camera hardware failed to start or is currently unavailable.")
-                manager.release()
+                manager.release(client_ip)
                 return
 
             if self.path in ('/snapshot', '/snapshot.jpg'):
@@ -219,7 +233,7 @@ class StreamHandler(BaseHTTPRequestHandler):
         except Exception:
             pass
         finally:
-            manager.release()
+            manager.release(client_ip)
 
 def main():
     p = argparse.ArgumentParser(
@@ -234,8 +248,12 @@ def main():
     p.add_argument('--fliph', action='store_true', help='Flip the camera stream horizontally')
     p.add_argument('--flipv', action='store_true', help='Flip the camera stream vertically')
     p.add_argument('--timeout', type=float, default=5, help='Seconds to wait while idle before shutting down camera. Negative values never shut down.')
+    p.add_argument('--debug', action='store_true', help='Enable debug level logging.')
 
     args = p.parse_args()
+
+    if args.debug:
+        logging.getLogger().setLevel(logging.DEBUG)
 
     manager = CameraManager(args)
     # A negative timeout indicates the camera should never automatically shut down,
