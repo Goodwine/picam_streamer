@@ -111,6 +111,7 @@ class CameraManager:
     def acquire(self):
         with self.lock:
             self.viewers += 1
+            logging.info(f"Viewer connected. Total viewers: {self.viewers}")
             if self.idle_timer:
                 self.idle_timer.cancel()
                 self.idle_timer = None
@@ -120,6 +121,7 @@ class CameraManager:
     def release(self):
         with self.lock:
             self.viewers = max(0, self.viewers - 1)
+            logging.info(f"Viewer disconnected. Total viewers: {self.viewers}")
             if self.viewers == 0 and not self.shutting_down:
                 if self.args.timeout == 0:
                     self._stop_hardware()
