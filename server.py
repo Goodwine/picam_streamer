@@ -11,13 +11,17 @@ class CameraSource:
         self.args = args
         self.on_frame = on_frame
         self.stop_event = threading.Event()
+        self.thread = None
 
     def start(self):
         self._initialize()
-        threading.Thread(target=self._run, daemon=True).start()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
 
     def stop(self):
         self.stop_event.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join(timeout=2.0)
 
     def _initialize(self):
         pass
@@ -91,6 +95,7 @@ class CameraManager:
         self.frame = None
         self.cam = None
         self.idle_timer = None
+        self.shutting_down = False
         self.lock = threading.Condition()
 
     def _on_frame(self, frame):
@@ -115,12 +120,14 @@ class CameraManager:
     def release(self):
         with self.lock:
             self.viewers = max(0, self.viewers - 1)
-            if self.viewers == 0:
+            if self.viewers == 0 and not self.shutting_down:
                 if self.args.timeout == 0:
                     self._stop_hardware()
                 elif self.args.timeout > 0:
                     logging.info(f"No viewers. Stopping in {self.args.timeout}s.")
                     self.idle_timer = threading.Timer(self.args.timeout, self._stop_hardware)
+                    # Otherwise, this prevents the program from exiting until the timer runs out.
+                    self.idle_timer.daemon = True
                     self.idle_timer.start()
 
     def _start_hardware(self):
@@ -144,10 +151,10 @@ class CameraManager:
 
         logging.error("No cameras available.")
 
-    def _stop_hardware(self):
+    def _stop_hardware(self, reason="idle"):
         with self.lock:
-            if self.viewers == 0 and self.cam:
-                logging.info("Camera turned off (idle).")
+            if self.cam:
+                logging.info(f"Camera turned off ({reason}).")
                 self.cam.stop()
                 self.cam = None
                 self.frame = None
@@ -221,12 +228,13 @@ def main():
     try:
         server.serve_forever()
     except KeyboardInterrupt:
+        manager.shutting_down = True
         logging.info("Keyboard interrupt received, shutting down...")
     finally:
         server.server_close()
         # Force a synchronous stop hook to prevent camera hardware lockups 
         # that could persist on the daemon thread while python exits.
-        manager._stop_hardware()
+        manager._stop_hardware(reason="interrupt")
 
 if __name__ == '__main__':
     main()
