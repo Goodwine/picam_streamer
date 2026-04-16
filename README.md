@@ -30,6 +30,28 @@ python3 server.py --help
 - `--fliph` / `--flipv`: Flips the camera image horizontally and/or vertically.
 - `--timeout`: Seconds to wait before stopping the camera when there are no viewers. Defaults to
   `5`. A negative value (e.g. `-1`) keeps the idle camera running indefinitely.
+- `--debug`: Enable debug level logging. This logs the requester's IP address.
+
+## Endpoints
+
+- **Continuous Stream**: Any path except the snapshot ones (e.g., `http://<host>:<port>/`) returns a
+  standard multipart MJPEG stream.
+- **Single Snapshot**: `/snapshot` or `/snapshot.jpg` returns a single static JPEG frame.
+
+## VisiCut Configuration
+
+VisiCut expects a single image rather than a continuous MJPEG stream. Use the snapshot endpoint for
+the camera URL:
+
+`http://<your_host>:<your_port>/snapshot`
+
+### Recommended Settings
+
+In the VisiCut Camera Settings:
+
+- **URL**: `http://<your_host>:<your_port>/snapshot`
+- **Timings (ms)**: This field controls the polling rate. It is recommended to set this between
+  **1000 and 3000** (1 to 3 seconds) to ensure a stable feed without overwhelming the network.
 
 ### Examples
 
