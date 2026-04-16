@@ -13,63 +13,76 @@ class CameraSource:
         self.stop_event = threading.Event()
 
     def start(self):
+        self._initialize()
         threading.Thread(target=self._run, daemon=True).start()
 
     def stop(self):
         self.stop_event.set()
 
+    def _initialize(self):
+        pass
+
     def _run(self):
         raise NotImplementedError
 
 class PiCameraSource(CameraSource):
-    def _run(self):
+    def _initialize(self):
         from picamera2 import Picamera2
-        from picamera2.encoders import JpegEncoder
-        from picamera2.outputs import FileOutput
         from libcamera import Transform
-        import io
 
-        cam = Picamera2()
+        self.cam = Picamera2()
         transform = Transform(
             hflip=bool(self.args.fliph),
             vflip=bool(self.args.flipv)
         )
-        cam.configure(cam.create_video_configuration(
+        self.cam.configure(self.cam.create_video_configuration(
             main={"size": (self.args.width, self.args.height)}, transform=transform
         ))
 
+    def _run(self):
+        from picamera2.encoders import JpegEncoder
+        from picamera2.outputs import FileOutput
+        import io
+
         class FrameOutput(io.BufferedIOBase):
             def write(buf_self, buf):
-                self.on_frame(buf)
+                self.on_frame(bytes(buf))
                 return len(buf)
 
-        cam.start_recording(JpegEncoder(), FileOutput(FrameOutput()))
+        self.cam.start_recording(JpegEncoder(), FileOutput(FrameOutput()))
         self.stop_event.wait()
-        cam.stop_recording()
-        cam.close()
+        self.cam.stop_recording()
+        self.cam.close()
 
 class WebcamSource(CameraSource):
-    def _run(self):
+    def _initialize(self):
         import cv2
-        cap = cv2.VideoCapture(0)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.args.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.args.height)
+        self.cv2 = cv2
+        self.cap = cv2.VideoCapture(0)
+        if not self.cap.isOpened():
+            raise RuntimeError("Could not open webcam.")
+            
+        # Request hardware MJPEG stream to prevent USB/IP packet loss
+        self.cap.set(cv2.CAP_PROP_FOURCC, self.cv2.VideoWriter_fourcc(*'MJPG'))
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.args.width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.args.height)
 
+    def _run(self):
         flip_code = -1 if self.args.fliph and self.args.flipv else \
                      1 if self.args.fliph else \
                      0 if self.args.flipv else None
 
         while not self.stop_event.is_set():
-            ret, frame = cap.read()
+            ret, frame = self.cap.read()
             if not ret:
                 time.sleep(0.1)
                 continue
             if flip_code is not None:
-                frame = cv2.flip(frame, flip_code)
-            ret, buf = cv2.imencode('.jpg', frame)
+                frame = self.cv2.flip(frame, flip_code)
+            ret, buf = self.cv2.imencode('.jpg', frame)
             if ret:
                 self.on_frame(buf.tobytes())
-        cap.release()
+        self.cap.release()
 
 class CameraManager:
     def __init__(self, args):
